@@ -3,3 +3,4 @@ opencv-python
 numpy
 yt-dlp
 websockets
+lapx

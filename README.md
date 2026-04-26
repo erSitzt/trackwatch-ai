@@ -69,10 +69,33 @@ YOLO-Interactive-Tracking-UI/
 
 ## 🛠️ Installation
 
+**Prerequisites:** Python 3.8+
+
 ```bash
-pip install ultralytics websockets
-# For YouTube sources:
-pip install yt-dlp
+# Clone the repository
+git clone https://github.com/ersitzt/trackwatch-ai.git
+cd trackwatch-ai
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+The `requirements.txt` includes:
+
+| Package         | Purpose                             |
+| --------------- | ----------------------------------- |
+| `ultralytics`   | YOLO detection & ByteTrack tracking |
+| `opencv-python` | Video capture and display           |
+| `numpy`         | Array operations                    |
+| `yt-dlp`        | YouTube source resolution           |
+| `websockets`    | WebSocket alarm hub (optional)      |
+| `lapx`          | Linear assignment for ByteTrack     |
+
+**GPU acceleration (optional):** install a CUDA-enabled PyTorch build before the above, then set `enable_gpu = True` in the script:
+
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
 ```
 
 ---
