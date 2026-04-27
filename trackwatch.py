@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -20,6 +21,7 @@ from ultralytics.utils.plotting import Annotator, colors
 
 from config import (
     ALARM_SECONDS,
+    CAMERA_POLL_INTERVAL,
     CAMERAS,
     LOOP_YOUTUBE,
     TRACKER_RESET_INTERVAL,
@@ -29,6 +31,7 @@ from config import (
     conf,
     detect_every,
     enable_gpu,
+    fetch_cameras,
     imgsz,
     iou,
     max_det,
@@ -290,7 +293,9 @@ class CameraWorker:
 
         active_ids: set[int] = set()
         log_parts: list[str] = []
+        ws_detections: list[dict] = []
         now = time.time()
+        frame_h_full, frame_w_full = im.shape[:2]
 
         for track in raw:
             if len(track) < 6:
@@ -322,6 +327,19 @@ class CameraWorker:
 
             log_parts.append(f"{class_name}#{track_id}@{duration_str}{'[ALARM]' if alarm else ''}")
 
+            ws_detections.append({
+                "track_id": track_id,
+                "class": class_name,
+                "conf": round(conf_score, 3),
+                "alarm": alarm,
+                "box": [
+                    round(x1 / frame_w_full, 4),
+                    round(y1 / frame_h_full, 4),
+                    round(x2 / frame_w_full, 4),
+                    round(y2 / frame_h_full, 4),
+                ],
+            })
+
             if alarm:
                 alarm_color = (0, 0, 255)
                 pulse = 2 + int(3 * abs(now % 1 - 0.5))
@@ -337,6 +355,16 @@ class CameraWorker:
                 (tw, th), bl = cv2.getTextSize(label, 0, 0.6, 1)
                 cv2.rectangle(im, (x1, y1 - th - 8), (x1 + tw + 6, y1), color, -1)
                 cv2.putText(im, label, (x1 + 3, y1 - 4), 0, 0.6, txt_color, 1, cv2.LINE_AA)
+
+        _debug = os.environ.get("DEBUG", "").lower() == "true"
+        to_send = ws_detections if _debug else [d for d in ws_detections if d["alarm"]]
+        if to_send or _debug:
+            self._ws_send({
+                "event": "detections",
+                "camera_id": self.camera_id,
+                "ts": now,
+                "detections": to_send,
+            })
 
         for stale_id in list(self.track_first_seen.keys()):
             if stale_id not in active_ids:
@@ -427,20 +455,64 @@ class CameraWorker:
 # Main — start workers, display on main thread (required by most GUI backends)
 # ---------------------------------------------------------------------------
 workers: list[CameraWorker] = []
+_workers_lock = threading.Lock()
 yt_domains = ("youtube.com", "youtu.be")
-for i, cfg in enumerate(CAMERAS):
+
+# Registry used by the WebSocket listener to dispatch ROI commands.
+_worker_registry: dict[int, CameraWorker] = {}
+
+
+def _launch_worker(cfg: CameraConfig) -> CameraWorker | None:
+    """Instantiate, register, and start a CameraWorker. Returns None on failure.
+
+    Safe to call from any thread. Window creation is intentionally omitted here
+    because cv2.namedWindow must run on the main thread — the main loop handles
+    it the first time it sees a new worker.
+    """
+    with _workers_lock:
+        if cfg.camera_id in _worker_registry:
+            return None  # already running
+        idx = len(workers)
+    is_yt = isinstance(cfg.source, str) and any(d in cfg.source for d in yt_domains)
     try:
-        is_yt = isinstance(cfg.source, str) and any(d in cfg.source for d in yt_domains)
-        w = CameraWorker(i, cfg, loop=LOOP_YOUTUBE and is_yt)
-        workers.append(w)
+        w = CameraWorker(idx, cfg, loop=LOOP_YOUTUBE and is_yt)
     except SystemError as e:
         LOGGER.error(str(e))
+        return None
+    with _workers_lock:
+        workers.append(w)
+        _worker_registry[w.camera_id] = w
+    w.start()
+    return w
+
+
+for cfg in fetch_cameras():
+    _launch_worker(cfg)
 
 if not workers:
     raise SystemError("No video sources could be opened.")
 
-# Registry used by the WebSocket listener to dispatch ROI commands.
-_worker_registry: dict[int, CameraWorker] = {w.camera_id: w for w in workers}
+
+def _camera_poll_loop() -> None:
+    """Background thread: periodically re-fetch the camera list and launch new workers."""
+    if not CAMERA_POLL_INTERVAL:
+        return
+    while True:
+        time.sleep(CAMERA_POLL_INTERVAL)
+        try:
+            for cfg in fetch_cameras():
+                with _workers_lock:
+                    already = cfg.camera_id in _worker_registry
+                if not already:
+                    w = _launch_worker(cfg)
+                    if w:
+                        LOGGER.info(f"[camera-poll] Started new worker: camera_id={cfg.camera_id} ({cfg.label})")
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(f"[camera-poll] Error during poll: {exc}")
+
+
+_poll_thread = threading.Thread(target=_camera_poll_loop, daemon=True, name="camera-poll")
+_poll_thread.start()
 
 
 # ---------------------------------------------------------------------------
@@ -618,18 +690,29 @@ async def _ws_hub() -> None:
 if WS_URL:
     asyncio.run_coroutine_threadsafe(_ws_hub(), _ws_loop)
 
-for w in workers:
-    w.start()
-    if show_video:
+# Initial window creation for workers that were started at launch.
+_known_windows: set[str] = set()
+if show_video:
+    with _workers_lock:
+        initial_workers = list(workers)
+    for w in initial_workers:
         cv2.namedWindow(w.window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(w.window_name, 1280, 720)
+        _known_windows.add(w.window_name)
 
 LOGGER.info(f"Started {len(workers)} camera worker(s). Press 'q' to quit.")
 
 try:
     while True:
         if show_video:
-            for w in workers:
+            with _workers_lock:
+                current_workers = list(workers)
+            for w in current_workers:
+                # Create window the first time we see a dynamically added worker.
+                if w.window_name not in _known_windows:
+                    cv2.namedWindow(w.window_name, cv2.WINDOW_NORMAL)
+                    cv2.resizeWindow(w.window_name, 1280, 720)
+                    _known_windows.add(w.window_name)
                 frame = w.get_frame()
                 if frame is not None:
                     cv2.imshow(w.window_name, frame)
@@ -639,7 +722,9 @@ try:
         else:
             time.sleep(0.01)
 finally:
-    for w in workers:
+    with _workers_lock:
+        all_workers = list(workers)
+    for w in all_workers:
         w.stop()
     if show_video:
         cv2.destroyAllWindows()
