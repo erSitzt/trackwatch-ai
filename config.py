@@ -42,7 +42,7 @@ WS_URL: str | None = "ws://localhost:3001"  # WebSocket URL for alarm events (No
 SERVER_HOST: str = "localhost"
 SERVER_PORT: int = 3000
 API_CAMERAS_ENABLED: bool = True       # False = use only CAMERAS list below
-API_CAMERAS_TIMEOUT: float = 5.0       # Seconds before giving up on the API call
+API_CAMERAS_TIMEOUT: float = 3.0       # Seconds before giving up on the API call
 CAMERA_POLL_INTERVAL: float = 30.0    # Seconds between runtime camera-list refreshes (0 = disabled)
 
 
@@ -118,12 +118,14 @@ def fetch_cameras() -> list[CameraConfig]:
         req = urllib.request.urlopen(url, timeout=API_CAMERAS_TIMEOUT)  # noqa: S310
         data: list[dict] = json.loads(req.read())
     except urllib.error.URLError as exc:
-        import warnings
-        warnings.warn(f"[config] Could not reach camera API ({url}): {exc} — using local CAMERAS only.")
+        import logging
+        _logger = logging.getLogger("trackwatch.config")
+        _logger.debug(f"[config] Could not reach camera API ({url}): {exc} — using local CAMERAS only.")
         return merged
     except Exception as exc:  # malformed JSON, etc.
-        import warnings
-        warnings.warn(f"[config] Unexpected error fetching camera API: {exc} — using local CAMERAS only.")
+        import logging
+        _logger = logging.getLogger("trackwatch.config")
+        _logger.debug(f"[config] Unexpected error fetching camera API: {exc} — using local CAMERAS only.")
         return merged
 
     for entry in data:

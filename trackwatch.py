@@ -199,12 +199,17 @@ class CameraWorker:
         LOGGER.info(f"[{self.camera_id}] Tracker reset — IDs restarting from 1")
 
     def _run(self) -> None:
+        rtsp_retry_delay = 2.0  # grows with each consecutive failure, capped at 60 s
         while not self._stop_event.is_set() and self.cap.isOpened():
             success, im = self.cap.read()
             if not success:
                 if isinstance(self.resolved, str) and self.resolved.startswith("rtsp"):
-                    LOGGER.warning(f"[{self.camera_id}] Stream lost — retrying in 2 s...")
-                    time.sleep(2)
+                    if not self._stop_event.is_set():
+                        LOGGER.warning(
+                            f"[{self.camera_id}] Stream lost — retrying in {rtsp_retry_delay:.0f} s..."
+                        )
+                        self._stop_event.wait(rtsp_retry_delay)
+                        rtsp_retry_delay = min(rtsp_retry_delay * 2, 60.0)
                     self.cap.release()
                     self.cap = cv2.VideoCapture(self.resolved)
                     continue
@@ -215,6 +220,7 @@ class CameraWorker:
                     self._reset_tracker()
                     continue
                 break
+            rtsp_retry_delay = 2.0  # reset on successful read
 
             # Cache the real frame dimensions from the first decoded frame and
             # notify the UI so it can use the correct coordinate space for ROI.
