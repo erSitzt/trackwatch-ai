@@ -119,7 +119,10 @@ class CameraWorker:
         LOGGER.info(f"[{self.camera_id}] Loading model...")
         self.model = YOLO(model_file, task="detect")
         if enable_gpu:
-            self.model.to("cuda")
+            import torch
+            device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
+            self.model.to(device)
+            LOGGER.info(f"[{self.camera_id}] Using device: {device}")
         self.classes = self.model.names
 
         self.cap = cv2.VideoCapture(self.resolved)

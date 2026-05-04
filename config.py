@@ -8,11 +8,11 @@ from dataclasses import dataclass, field
 # ---------------------------------------------------------------------------
 # Global settings
 # ---------------------------------------------------------------------------
-enable_gpu = False                          # Set True if running with CUDA
+enable_gpu = True                          # Set True to use GPU/NPU acceleration (MPS on Apple Silicon, CUDA on NVIDIA)
 model_file = "yolo26s.pt"                   # Path to model file
 show_fps = True                             # Show current FPS overlay
 show_conf = True                            # Show confidence score in label
-show_video = False                           # Set False to disable all display windows (headless mode)
+show_video = True                           # Set False to disable all display windows (headless mode)
 save_video = False                          # Set True to save per-source video
 video_output_template = "trackwatch_cam{idx}.avi"  # {idx} replaced per source
 
@@ -20,7 +20,7 @@ conf = 0.60         # Min detection confidence
 iou = 0.5           # IoU threshold for NMS
 max_det = 30        # Maximum detections per frame
 imgsz = 224         # Inference resolution (320/416/640); smaller = faster, less accurate
-detect_every = 2    # Run detection every N frames (1 = every frame, 2 = every other, …)
+detect_every = 1    # Run detection every N frames (1 = every frame, 2 = every other, …)
 
 tracker = "bytetrack.yaml"
 track_args = {
@@ -74,12 +74,18 @@ class CameraConfig:
 # fetched from the API are merged in at runtime (API cameras that share a
 # camera_id with a local entry are skipped so local config wins).
 CAMERAS: list[CameraConfig] = [
-    #  CameraConfig(
-    #      source="rtsp://gsccam:Start123@192.168.2.168/stream2",
-    #      camera_id=4,
-    #      label="Entrance RTSP",
-    #      alarm_seconds=5.0,
-    #  ),
+      CameraConfig(
+          source="rtsp://gsccam:Start123@192.168.2.167/stream1",
+          camera_id=1,
+          label="Sprung 1",
+          alarm_seconds=5.0,
+      ),
+      CameraConfig(
+          source="rtsp://gsccam:Start123@192.168.2.168/stream1",
+          camera_id=2,
+          label="Sprung 2",
+          alarm_seconds=5.0,
+      ),
     #  CameraConfig(
     #      source="https://www.youtube.com/watch?v=2-tYpDcTcKQ",
     #      camera_id=3,
